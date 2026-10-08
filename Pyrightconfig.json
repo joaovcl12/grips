@@ -1,0 +1,16 @@
+{
+  "typeCheckingMode": "standard",
+
+  "//": "Regras desligadas abaixo são ruído de 'mágica' de biblioteca (SQLAlchemy, FastAPI, Pydantic) — não pegam bugs reais no seu código, só reclamam que o basedpyright não consegue ver o que o metaclass/decorator faz em runtime.",
+
+  "reportUninitializedInstanceVariable": "none",
+  "reportUnusedCallResult": "none",
+  "reportAny": "none",
+  "reportUnknownMemberType": "none",
+  "reportUnknownVariableType": "none",
+  "reportUnknownParameterType": "none",
+  "reportUnknownArgumentType": "none",
+  "reportMissingTypeArgument": "none",
+  "reportUntypedFunctionDecorator": "none",
+  "reportPrivateLocalImportUsage": "none"
+}

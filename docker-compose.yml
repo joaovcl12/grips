@@ -1,0 +1,16 @@
+version: "3.8"
+services:
+  db:
+    image: ankane/pgvector:latest
+    container_name: grips_postgres_vector
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: grips_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - grips_db_data:/var/lib/postgresql/data
+
+volumes:
+  grips_db_data:

@@ -1,0 +1,16 @@
+# Ambientes virtuais e cache
+venv/
+env/
+__pycache__/
+*.pyc
+
+# Arquivos de ambiente e banco de dados local
+.env
+*.db
+*.sqlite3
+
+# Se você mapeou a pasta de dados do PostgreSQL no Docker para uma pasta local
+postgres-data/
+.env
+.claude/skills
+.agents/skills
