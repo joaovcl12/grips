@@ -1,6 +1,7 @@
 import datetime
 
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import relationship
 
 from database import Base
 
@@ -8,21 +9,44 @@ from database import Base
 class Projeto(Base):
     __tablename__ = "projetos"
 
-    id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    codigo: Mapped[str] = mapped_column(unique=True, index=True)  # Ex: PRJ-2026-001
-    nome: Mapped[str] = mapped_column(nullable=False)
-    prazo_meses: Mapped[int] = mapped_column()
-    roi_esperado: Mapped[float] = mapped_column()
-    payback_meses: Mapped[float] = mapped_column()
-    experiencia_equipe: Mapped[str] = mapped_column()  # Alta, Media, Baixa
+    id = Column(Integer, primary_key=True, index=True)
+    codigo = Column(String, unique=True, index=True)  # Ex: PRJ-2026-001
+    nome = Column(String, nullable=False)
+    escopo = Column(Text, default="")
+    prazo_meses = Column(Integer, nullable=False)
+    roi_esperado = Column(Float, nullable=False)
+    payback_meses = Column(Float, nullable=False)
+    experiencia_equipe = Column(String, nullable=False)  # Alta, Média, Baixa
 
     # Dados calculados pelo sistema
-    viabilidade_score: Mapped[float] = mapped_column(default=0.0)
-    risco_global_score: Mapped[float] = mapped_column(default=0.0)
-    status: Mapped[str] = mapped_column(
-        default="Pendente"
-    )  # Aprovado, Restrições, Reprovado
+    viabilidade_score = Column(Float, default=0.0)
+    # Aprovado / Com ressalvas / Restrições  (derivado de viabilidade_score)
+    status_viabilidade = Column(String, default="Restrições")
+    risco_global_score = Column(Float, default=0.0)
+    nivel_risco = Column(String, default="Baixo")  # Baixo, Médio, Alto
+    # Sem análise / Controlado / Monitorando / Em mitigação  (derivado dos riscos)
+    status_risco = Column(String, default="Sem análise")
+    parecer_tecnico = Column(Text, nullable=True)
 
-    data_criacao: Mapped[datetime.datetime] = mapped_column(
-        default=lambda: datetime.datetime.now(datetime.UTC)
+    data_criacao = Column(DateTime, default=datetime.datetime.utcnow)
+
+    # Relacionamento 1-para-Muitos com Riscos
+    riscos = relationship(
+        "Risco", back_populates="projeto", cascade="all, delete-orphan"
     )
+
+
+class Risco(Base):
+    __tablename__ = "riscos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    projeto_id = Column(Integer, ForeignKey("projetos.id"), nullable=False)
+    titulo = Column(String, nullable=False)
+    responsavel = Column(String, default="Não atribuído")
+    probabilidade = Column(Integer, nullable=False)  # 1 a 5
+    impacto = Column(Integer, nullable=False)  # 1 a 5
+    criticidade_score = Column(Integer, nullable=False)  # prob * imp (1 a 25)
+    prioridade = Column(String, nullable=False)  # Baixa, Média, Alta
+    data_criacao = Column(DateTime, default=datetime.datetime.utcnow)
+
+    projeto = relationship("Projeto", back_populates="riscos")
