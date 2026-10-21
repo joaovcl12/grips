@@ -1,28 +1,23 @@
-import os
 import re
 from pathlib import Path
 from typing import Sequence, TypedDict
 
-from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from langchain_core.documents import Document
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_postgres import PGVector
 
-from motor_riscos import RiscoSaida
-
-_ = load_dotenv()
-
-# O nome do modelo pode ser trocado pelo .env (GEMINI_MODEL) sem mexer no código.
-MODELO_PADRAO = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
-STRING_CONEXAO_BD = "postgresql+psycopg://admin:adminpassword@localhost:5432/grips_db"
-NOME_COLECAO = "referenciais_teoricos"
+from backend.config import (
+    GEMINI_MODEL,
+    NOME_COLECAO_VETORIAL,
+    obter_chave_gemini,
+    url_banco,
+)
+from backend.motor_riscos import RiscoSaida
 
 # ── Parâmetros da recuperação (RAG) ───────────────────────────────────────────
-MAX_RISCOS_BUSCADOS = (
-    5  # só os mais críticos geram consulta (1 chamada de embedding cada)
-)
+MAX_RISCOS_BUSCADOS = 5  # só os mais críticos geram consulta (1 chamada de embedding cada)
 TRECHOS_POR_RISCO = 3  # candidatos recuperados por consulta
 MAX_TRECHOS_CONTEXTO = 8  # teto de trechos enviados ao modelo
 TIMEOUT_API_MS = 60_000
@@ -53,12 +48,8 @@ class AgenteDiagnostico:
     banco_vetorial: PGVector
 
     def __init__(self) -> None:
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            raise ValueError("Chave da API não encontrada no arquivo .env")
-
         self.client = genai.Client(
-            api_key=api_key,
+            api_key=obter_chave_gemini(),
             http_options=types.HttpOptions(timeout=TIMEOUT_API_MS),
         )
 
@@ -67,8 +58,8 @@ class AgenteDiagnostico:
         )
         self.banco_vetorial = PGVector(
             embeddings=modelo_embeddings,
-            collection_name=NOME_COLECAO,
-            connection=STRING_CONEXAO_BD,
+            collection_name=NOME_COLECAO_VETORIAL,
+            connection=url_banco(),
             use_jsonb=True,
         )
 
@@ -123,9 +114,7 @@ class AgenteDiagnostico:
         titulo = "**Fontes citadas no parecer**"
         if not usados:
             usados = list(trechos)
-            titulo = (
-                "**Trechos consultados** (o parecer não citou fontes explicitamente)"
-            )
+            titulo = "**Trechos consultados** (o parecer não citou fontes explicitamente)"
         linhas = "\n".join(
             f"- [{t['numero']}] {t['fonte']}, p. {t['pagina']}" for t in usados
         )
@@ -143,7 +132,7 @@ class AgenteDiagnostico:
         if not trechos:
             raise ErroParecer(
                 "Nenhum trecho encontrado na base de conhecimento. "
-                "Rode a ingestão (ingestao_pdf.py) antes de gerar o parecer."
+                "Rode a ingestão (python -m scripts.ingestao_pdf) antes de gerar o parecer."
             )
 
         lista_riscos = "\n".join(
@@ -178,7 +167,7 @@ o diagnóstico curto seguido das mitigações com suas citações.
 
         try:
             resposta = self.client.models.generate_content(
-                model=MODELO_PADRAO,
+                model=GEMINI_MODEL,
                 contents=prompt,
             )
         except Exception as erro:

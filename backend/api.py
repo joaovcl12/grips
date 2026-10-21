@@ -6,12 +6,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-import models
-from analise_ai import AgenteDiagnostico, ErroParecer
-from database import engine, obter_banco
-from motor_riscos import MotorDeRisco, RiscoEntrada
-from motor_viabilidade import STATUS_APROVADO
-from servico_projetos import atualizar_exposicao, atualizar_viabilidade
+from backend import models
+from backend.analise_ai import AgenteDiagnostico, ErroParecer
+from backend.config import CORS_ORIGINS
+from backend.database import engine, obter_banco
+from backend.motor_riscos import MotorDeRisco, RiscoEntrada
+from backend.motor_viabilidade import STATUS_APROVADO
+from backend.servico_projetos import atualizar_exposicao, atualizar_viabilidade
 
 # Cria as tabelas (projetos e riscos) no PostgreSQL caso não existam
 models.Base.metadata.create_all(bind=engine)
@@ -23,7 +24,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -4,11 +4,15 @@ Front-end em Streamlit 100% integrado ao Back-end FastAPI + PostgreSQL (Zero dad
 """
 
 import base64
+import os
+from datetime import datetime
+from html import escape as esc
 from pathlib import Path
 from urllib.parse import quote
 
 import requests
 import streamlit as st
+from dotenv import load_dotenv
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Configuração da página
@@ -20,7 +24,10 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-API_URL = "http://localhost:8000"
+_ = load_dotenv()
+
+# Endereço da API (pode ser trocado no .env com GRIPS_API_URL)
+API_URL = os.getenv("GRIPS_API_URL", "http://localhost:8000")
 
 # Cores da grelha 5x5 (referencial visual da matriz de risco, não são dados de projetos)
 MAPA = [
@@ -39,6 +46,30 @@ NIVEL_ESTILO = {
     "Baixo": ("#e8f3ef", "#388b7e"),
     "Baixa": ("#e8f3ef", "#388b7e"),
 }
+
+NIVEIS_PROBABILIDADE = [
+    "1 · Muito baixa",
+    "2 · Baixa",
+    "3 · Média",
+    "4 · Alta",
+    "5 · Muito alta",
+]
+NIVEIS_IMPACTO = [
+    "1 · Muito baixo",
+    "2 · Baixo",
+    "3 · Médio",
+    "4 · Alto",
+    "5 · Muito alto",
+]
+
+NAV = [
+    ("home", "Visão geral", "grid"),
+    ("projetos", "Projetos", "folder"),
+    ("riscos", "Riscos", "alert"),
+    ("analises", "Análises", "chart"),
+    ("relatorios", "Relatórios", "file"),
+    ("config", "Configurações", "settings"),
+]
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Ícones (estilo Lucide)
@@ -80,9 +111,36 @@ def compacto(html: str) -> str:
     return "".join(linha.strip() for linha in html.splitlines())
 
 
+def saudacao() -> str:
+    hora = datetime.now().hour
+    if hora < 12:
+        return "Bom dia."
+    if hora < 18:
+        return "Boa tarde."
+    return "Boa noite."
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Funções de Comunicação com o Back-end (FastAPI)
 # ──────────────────────────────────────────────────────────────────────────────
+def requisitar(metodo: str, caminho: str, timeout: int = 15, **kwargs):
+    """Chama a API. Retorna (resposta, None) em caso de sucesso ou (None, mensagem_de_erro)."""
+    try:
+        resposta = requests.request(
+            metodo, f"{API_URL}{caminho}", timeout=timeout, **kwargs
+        )
+    except requests.exceptions.RequestException as erro:
+        return None, f"Não foi possível falar com a API: {erro}"
+
+    if resposta.status_code >= 400:
+        try:
+            detalhe = resposta.json().get("detail", resposta.text)
+        except ValueError:
+            detalhe = resposta.text
+        return None, str(detalhe)
+    return resposta, None
+
+
 def carregar_dados_dashboard():
     try:
         r = requests.get(f"{API_URL}/dashboard", timeout=5)
@@ -104,15 +162,34 @@ def carregar_detalhes_projeto(projeto_id: int):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Estado de Navegação
+# Estado de Navegação (+ links ?projeto=ID e ?pagina=nome vindos da tabela)
 # ──────────────────────────────────────────────────────────────────────────────
 if "pagina" not in st.session_state:
     st.session_state.pagina = "home"
 if "projeto_selecionado_id" not in st.session_state:
     st.session_state.projeto_selecionado_id = None
 
+
+def consumir_query_params() -> None:
+    """Aplica o link clicado (ex.: seta da tabela) e limpa a URL para não 'prender' a navegação."""
+    qp = st.query_params
+    if "projeto" in qp:
+        try:
+            st.session_state.projeto_selecionado_id = int(qp["projeto"])
+            st.session_state.pagina = "projetos"
+        except ValueError:
+            pass
+    elif qp.get("pagina") in {chave for chave, _, _ in NAV}:
+        st.session_state.pagina = qp["pagina"]
+    if len(qp) > 0:
+        st.query_params.clear()
+
+
+consumir_query_params()
+
 dados_dash, erro_api = carregar_dados_dashboard()
 total_riscos_criticos_badge = dados_dash["kpis"]["riscos_criticos"] if dados_dash else 0
+projetos_disp = dados_dash["projetos"] if dados_dash else []
 
 LOGO_PATH = Path(__file__).parent / "assets" / "logo.png"
 LOGO_B64 = (
@@ -120,20 +197,14 @@ LOGO_B64 = (
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
-# CSS global (Limpo das quebras de layout estáticas)
+# CSS global
 # ──────────────────────────────────────────────────────────────────────────────
-NAV = [
-    ("home", "Visão geral", "grid"),
-    ("projetos", "Projetos", "folder"),
-    ("riscos", "Riscos", "alert"),
-    ("analises", "Análises", "chart"),
-    ("relatorios", "Relatórios", "file"),
-    ("config", "Configurações", "settings"),
-]
-
 css_icones = ""
 for chave, _, ic in NAV:
     css_icones += f".st-key-nav_{chave} button::before{{-webkit-mask-image:{svg_mask(ic)};mask-image:{svg_mask(ic)};}}\n"
+
+# Ponto vermelho no sino só quando existem riscos críticos de verdade
+bell_dot = "block" if total_riscos_criticos_badge > 0 else "none"
 
 CSS = f"""
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
@@ -152,11 +223,42 @@ header[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecor
     max-width: none !important;
 }}
 
-/* Espaçamento corrigido entre as colunas nativas do Streamlit */
 [data-testid="stMain"] [data-testid="stHorizontalBlock"] {{ gap: 14px !important; }}
 [data-testid="stMain"] .st-key-row_chart [data-testid="stHorizontalBlock"] {{ gap: 18px !important; }}
 [data-testid="stMain"] .stMarkdown p {{ margin: 0; }}
 [data-testid="stElementContainer"] {{ width: 100%; }}
+
+/* ── Campos de formulário (estilo do protótipo: cantos suaves, foco teal) ── */
+[data-testid="stWidgetLabel"] p {{ font-size: 11.5px; font-weight: 600; color: #3b4a46; }}
+[data-baseweb="input"], [data-baseweb="textarea"], [data-baseweb="select"] > div {{
+    background: #ffffff !important; border-radius: 10px !important;
+    border: 1px solid #dfe6e2 !important;
+}}
+[data-baseweb="input"]:focus-within, [data-baseweb="textarea"]:focus-within,
+[data-baseweb="select"] > div:focus-within {{
+    border-color: #1f7a78 !important; box-shadow: 0 0 0 1px #1f7a78 !important;
+}}
+[data-baseweb="base-input"] {{ background: transparent !important; }}
+
+/* ── Botões: secundário (contorno) e primário (teal). Especificidade baixa
+      de propósito, para os botões com chave própria (topbar, sidebar) vencerem. ── */
+:where([data-testid="stMain"], [data-testid="stDialog"]) .stButton > button {{
+    height: 42px; border-radius: 10px; border: 1px solid #dfe6e2; background: #ffffff;
+    color: #334441; font-size: 12.5px; font-weight: 600; box-shadow: none;
+}}
+:where([data-testid="stMain"], [data-testid="stDialog"]) .stButton > button:hover {{
+    border-color: #c9d3ce; background: #f5f7f6; color: #172725;
+}}
+:where([data-testid="stMain"], [data-testid="stDialog"]) .stButton > button p {{ color: inherit; font-size: 12.5px; font-weight: 600; }}
+:where([data-testid="stMain"], [data-testid="stDialog"]) .stButton > button[kind="primary"],
+:where([data-testid="stMain"], [data-testid="stDialog"]) .stButton > button[data-testid="stBaseButton-primary"] {{
+    background: #1f5f58; border-color: #1f5f58; color: #ffffff;
+    box-shadow: 0 4px 12px rgba(31,95,88,.22);
+}}
+:where([data-testid="stMain"], [data-testid="stDialog"]) .stButton > button[kind="primary"]:hover,
+:where([data-testid="stMain"], [data-testid="stDialog"]) .stButton > button[data-testid="stBaseButton-primary"]:hover {{
+    background: #19514b; border-color: #19514b; color: #ffffff;
+}}
 
 /* ── Sidebar ───────────────────────────────────────────────────── */
 [data-testid="stSidebar"] {{
@@ -186,7 +288,7 @@ header[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecor
 }}
 [data-testid="stSidebar"] .stButton > button:hover {{ background: rgba(255,255,255,.04); color: #fff; }}
 [data-testid="stSidebar"] .stButton > button:focus {{ outline: none; box-shadow: none !important; }}
-[data-testid="stSidebar"] .stButton > button p {{ margin: 0; font-size: 13.5px; font-weight: 500; }}
+[data-testid="stSidebar"] .stButton > button p {{ margin: 0; font-size: 13.5px; font-weight: 500; color: inherit; }}
 [data-testid="stSidebar"] .stButton > button::before {{
     content: ""; width: 18px; height: 18px; flex: none; background: #94a3b8;
     -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
@@ -233,6 +335,7 @@ header[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecor
 .st-key-search [data-baseweb="input"] {{
     position: relative; height: 39px; background: #f5f7f6 !important;
     border: 1px solid #e5eae7 !important; border-radius: 10px !important; overflow: visible;
+    box-shadow: none !important;
 }}
 .st-key-search [data-baseweb="base-input"] {{ background: transparent !important; }}
 .st-key-search input {{
@@ -251,6 +354,10 @@ header[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecor
     position: relative; width: 38px; height: 38px; background: #fff; border: 1px solid #e5eae7;
     border-radius: 10px; display: flex; align-items: center; justify-content: center; color: #475569;
 }}
+.bell .dot {{
+    display: {bell_dot}; position: absolute; top: 7px; right: 8px; width: 7px; height: 7px;
+    border-radius: 50%; background: #e5604d; border: 1.5px solid #fff; box-sizing: content-box;
+}}
 
 .st-key-novo_risco .stButton, .st-key-novo_risco {{ width: 100%; }}
 .st-key-novo_risco button {{
@@ -265,7 +372,16 @@ header[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecor
     -webkit-mask: {svg_mask("plus", 2.2)} center/contain no-repeat; mask: {svg_mask("plus", 2.2)} center/contain no-repeat;
 }}
 
-/* ── Hero & Cards (Adicionado margin-bottom para não sobrepor KPI) */
+/* Botão secundário com ícone "+" (usado em "Novo projeto") */
+.st-key-hero_btn button, .st-key-empty_btn button {{
+    display: flex; align-items: center; justify-content: center; gap: 8px; white-space: nowrap;
+}}
+.st-key-hero_btn button::before, .st-key-empty_btn button::before {{
+    content: ""; width: 14px; height: 14px; background: #334441; flex: none;
+    -webkit-mask: {svg_mask("plus", 2.2)} center/contain no-repeat; mask: {svg_mask("plus", 2.2)} center/contain no-repeat;
+}}
+
+/* ── Hero & Cards ─────────────────────────────────────────────── */
 .hero {{ margin-top: 32px; margin-bottom: 28px; display: block; }}
 .hero .eyebrow {{
     font-size: 9.5px; font-weight: 600; letter-spacing: .2em; color: #1f7a78; line-height: 12px;
@@ -339,12 +455,17 @@ header[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecor
 .heat-legend .l span {{ display: flex; align-items: center; gap: 4px; }}
 .heat-legend .l i {{ width: 7px; height: 7px; border-radius: 50%; display: inline-block; }}
 
-/* Tabela */
+/* Tabela "Projetos em atenção" */
 .row-table {{ margin-top: 18px; }}
 .card-table {{ padding: 22px 22px 14px 22px; }}
 .t-head {{ display: flex; justify-content: space-between; align-items: flex-start; }}
+.t-link {{
+    font-size: 10.5px; font-weight: 600; color: #1f7a78; text-decoration: none;
+    display: inline-flex; align-items: center; gap: 6px; margin-top: 2px;
+}}
+.t-link:hover {{ color: #17605e; }}
 .grid-row {{
-    display: grid; grid-template-columns: 2.2fr 1.1fr 1.45fr 1.15fr 1.25fr .8fr; align-items: center;
+    display: grid; grid-template-columns: 2.2fr 1.1fr 1.4fr 1.15fr 1.7fr .8fr .5fr; align-items: center;
     padding: 0 12px;
 }}
 .t-cols {{ margin-top: 22px; height: 35px; border-bottom: 1px solid #edf1ef; }}
@@ -372,8 +493,23 @@ header[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecor
     padding: 5px 9px; border-radius: 7px; line-height: 12px;
 }}
 .rev {{ font-size: 10px; color: #3b4a46; font-weight: 600; }}
+.act {{ display: flex; justify-content: flex-end; }}
+.go {{
+    width: 30px; height: 30px; border: 1px solid #e0e6e3; border-radius: 8px; background: #fff;
+    display: flex; align-items: center; justify-content: center; text-decoration: none;
+}}
+.go:hover {{ background: #f0f3f2; border-color: #cfd8d3; }}
 
-/* ── Modais (Limpo das regras que quebravam a janela nativa do Streamlit) ── */
+/* Estado vazio */
+.empty {{
+    padding: 34px 28px; text-align: center; border: 1px dashed #d5ddd9; border-radius: 16px;
+    background: #ffffff; color: #66736f; font-size: 12px; line-height: 18px;
+}}
+.empty b {{ display: block; color: #172725; font-size: 14px; font-weight: 500; margin-bottom: 4px; }}
+
+/* ── Modais (janela nativa do Streamlit, com o cabeçalho do protótipo) ── */
+[data-testid="stDialog"] div[role="dialog"] {{ border-radius: 18px; }}
+[data-testid="stDialog"] div[role="dialog"] h2 {{ display: none; }}
 .dlg-body {{ padding: 8px 0px 0 0px; }}
 .dlg-eyebrow {{ font-size: 9px; font-weight: 600; letter-spacing: .16em; color: #1f7a78; text-transform: uppercase; }}
 .dlg-title {{ font-size: 20px; font-weight: 500; color: #172725; margin-top: 10px; line-height: 26px; }}
@@ -385,17 +521,17 @@ st.markdown(f"<style>{CSS}</style>", unsafe_allow_html=True)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Modal 1: Cadastrar Novo Projeto (No Dashboard Principal)
+# Modal 1: Adicionar projeto
 # ──────────────────────────────────────────────────────────────────────────────
-@st.dialog("Novo Projeto de Análise", width="large")
+@st.dialog("Adicionar projeto", width="large")
 def modal_novo_projeto():
     st.markdown(
         compacto(
             """
             <div class="dlg-body">
-              <div class="dlg-eyebrow">Cadastro de Projeto</div>
-              <div class="dlg-title">Novo Projeto de Análise</div>
-              <div class="dlg-sub">Insira os parâmetros técnicos e financeiros para calcular a viabilidade e gerar o código único.</div>
+              <div class="dlg-eyebrow">Novo registro</div>
+              <div class="dlg-title">Adicionar projeto</div>
+              <div class="dlg-sub">Cadastre os parâmetros técnicos e financeiros para calcular a viabilidade e gerar o código do projeto.</div>
               <div class="dlg-sep"></div>
             </div>
             """
@@ -403,40 +539,38 @@ def modal_novo_projeto():
         unsafe_allow_html=True,
     )
 
-    nome = st.text_input("Nome do Projeto", placeholder="Ex.: Migração Cloud AWS")
+    nome = st.text_input("Título do projeto", placeholder="Ex.: Migração Cloud AWS")
     escopo = st.text_area(
-        "Escopo Técnico do Projeto",
+        "Escopo técnico",
         placeholder="Descreva brevemente o objetivo e a arquitetura para contextualizar a IA...",
     )
 
     c1, c2, c3 = st.columns(3)
     with c1:
         prazo = st.number_input(
-            "Prazo (Meses)", min_value=1, max_value=120, value=6, step=1
+            "Prazo (meses)", min_value=1, max_value=120, value=6, step=1
         )
     with c2:
         roi = st.number_input(
-            "ROI Esperado (%)", min_value=0.0, max_value=1000.0, value=25.0, step=1.0
+            "ROI esperado (%)", min_value=0.0, max_value=1000.0, value=25.0, step=1.0
         )
     with c3:
         payback = st.number_input(
-            "Payback (Meses)", min_value=0.5, max_value=120.0, value=4.0, step=0.5
+            "Payback (meses)", min_value=0.5, max_value=120.0, value=4.0, step=0.5
         )
 
     experiencia = st.selectbox(
-        "Experiência da Equipe", ["Alta", "Média", "Baixa"], index=0
+        "Experiência da equipe", ["Alta", "Média", "Baixa"], index=0
     )
 
-    b1, b2 = st.columns(2)
+    _, b1, b2 = st.columns([1.3, 1, 1.5])
     with b1:
         if st.button("Cancelar", use_container_width=True):
             st.rerun()
     with b2:
-        if st.button(
-            "Calcular Viabilidade & Salvar", type="primary", use_container_width=True
-        ):
+        if st.button("Salvar projeto", type="primary", use_container_width=True):
             if not nome.strip():
-                st.warning("Informe o nome do projeto.")
+                st.warning("Informe o título do projeto.")
             else:
                 payload = {
                     "nome": nome.strip(),
@@ -446,29 +580,29 @@ def modal_novo_projeto():
                     "payback_meses": float(payback),
                     "experiencia_equipe": experiencia,
                 }
-                res = requests.post(f"{API_URL}/projetos", json=payload)
-                if res.status_code == 200:
+                res, erro = requisitar("POST", "/projetos", json=payload)
+                if erro or res is None:
+                    st.error(f"Erro ao salvar projeto: {erro}")
+                else:
                     proj_criado = res.json()
                     st.toast(f"Projeto {proj_criado['codigo']} salvo com sucesso!")
                     st.session_state.projeto_selecionado_id = proj_criado["id"]
                     st.session_state.pagina = "projetos"
                     st.rerun()
-                else:
-                    st.error(f"Erro ao salvar projeto: {res.text}")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Modal 2: Adicionar Risco (Movido para DENTRO de um Projeto)
+# Modal 2: Adicionar risco (com seletor de projeto, como no protótipo)
 # ──────────────────────────────────────────────────────────────────────────────
-@st.dialog("Mapear Novo Risco", width="large")
-def modal_novo_risco(projeto_id: int, nome_projeto: str):
+@st.dialog("Adicionar risco", width="large")
+def modal_novo_risco(projetos: list, id_padrao: int | None):
     st.markdown(
         compacto(
-            f"""
+            """
             <div class="dlg-body">
-              <div class="dlg-eyebrow">Projeto: {nome_projeto}</div>
-              <div class="dlg-title">Mapear Novo Risco</div>
-              <div class="dlg-sub">Registre a variável de risco para cálculo na matriz 5x5 (PMBOK).</div>
+              <div class="dlg-eyebrow">Novo registro</div>
+              <div class="dlg-title">Adicionar risco</div>
+              <div class="dlg-sub">Registre o contexto para priorização da equipe. Probabilidade × impacto definem a criticidade na matriz 5×5.</div>
               <div class="dlg-sep"></div>
             </div>
             """
@@ -476,44 +610,57 @@ def modal_novo_risco(projeto_id: int, nome_projeto: str):
         unsafe_allow_html=True,
     )
 
+    if not projetos:
+        st.info("Cadastre um projeto antes de mapear riscos.")
+        if st.button("Fechar", use_container_width=True):
+            st.rerun()
+        return
+
     titulo = st.text_input(
-        "Título do Risco", placeholder="Ex.: Falta de conhecimento da equipe em Docker"
+        "Título do risco", placeholder="Ex.: Falta de conhecimento da equipe em Docker"
     )
-    responsavel = st.text_input(
-        "Responsável pela Mitigação", placeholder="Ex.: João Vitor"
-    )
+
+    opcoes = {f"{p['cod']} · {p['nome']}": p["id"] for p in projetos}
+    chaves = list(opcoes.keys())
+    idx = list(opcoes.values()).index(id_padrao) if id_padrao in opcoes.values() else 0
 
     c1, c2 = st.columns(2)
     with c1:
-        prob = st.slider("Probabilidade (1 = Muito Baixa, 5 = Muito Alta)", 1, 5, 3)
+        escolha = st.selectbox("Projeto", chaves, index=idx)
     with c2:
-        impacto = st.slider("Impacto (1 = Muito Baixo, 5 = Muito Alto)", 1, 5, 4)
+        responsavel = st.text_input(
+            "Responsável pela mitigação", placeholder="Ex.: João Vitor"
+        )
 
-    b1, b2 = st.columns(2)
+    c3, c4 = st.columns(2)
+    with c3:
+        prob_txt = st.selectbox("Probabilidade", NIVEIS_PROBABILIDADE, index=2)
+    with c4:
+        imp_txt = st.selectbox("Impacto", NIVEIS_IMPACTO, index=3)
+
+    _, b1, b2 = st.columns([1.5, 1, 1.3])
     with b1:
         if st.button("Cancelar", use_container_width=True):
             st.rerun()
     with b2:
-        if st.button(
-            "Salvar Risco na Matriz", type="primary", use_container_width=True
-        ):
+        if st.button("Salvar risco", type="primary", use_container_width=True):
             if not titulo.strip():
                 st.warning("Informe o título do risco.")
             else:
                 payload = {
                     "titulo": titulo.strip(),
                     "responsavel": responsavel.strip() or "Equipe Técnica",
-                    "probabilidade": int(prob),
-                    "impacto": int(impacto),
+                    "probabilidade": int(prob_txt[0]),
+                    "impacto": int(imp_txt[0]),
                 }
-                res = requests.post(
-                    f"{API_URL}/projetos/{projeto_id}/riscos", json=payload
+                res, erro = requisitar(
+                    "POST", f"/projetos/{opcoes[escolha]}/riscos", json=payload
                 )
-                if res.status_code == 200:
+                if erro or res is None:
+                    st.error(f"Erro ao salvar risco: {erro}")
+                else:
                     st.toast("Risco mapeado e matriz atualizada!")
                     st.rerun()
-                else:
-                    st.error(f"Erro ao salvar risco: {res.text}")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -552,7 +699,7 @@ with st.sidebar:
         )
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Topbar (Botão principal agora é "+ Novo projeto")
+# Topbar (como no protótipo: busca, sino e botão "+ Novo risco")
 # ──────────────────────────────────────────────────────────────────────────────
 with st.container(key="topbar"):
     t1, t2, t3, t4 = st.columns([43.3, 38.9, 3.8, 14.0], vertical_alignment="center")
@@ -566,13 +713,15 @@ with st.container(key="topbar"):
             )
     with t3:
         st.markdown(
-            f'<div class="bell-wrap"><div class="bell">{svg_inline("bell", 16, "currentColor", 1.8)}</div></div>',
+            f'<div class="bell-wrap"><div class="bell">{svg_inline("bell", 16, "currentColor", 1.8)}<span class="dot"></span></div></div>',
             unsafe_allow_html=True,
         )
     with t4:
         with st.container(key="novo_risco"):
-            if st.button("Novo projeto", key="btn_novo_projeto_top"):
-                modal_novo_projeto()
+            if st.button("Novo risco", key="btn_novo_risco_top"):
+                modal_novo_risco(
+                    projetos_disp, st.session_state.projeto_selecionado_id
+                )
 
 if erro_api:
     st.error(erro_api)
@@ -583,7 +732,6 @@ if erro_api:
 # ABA: PROJETOS (Detalhes do Projeto + Adicionar Risco + Parecer IA)
 # ──────────────────────────────────────────────────────────────────────────────
 if st.session_state.pagina == "projetos":
-    projetos_disp = dados_dash["projetos"]
     if not projetos_disp:
         st.markdown(
             compacto(
@@ -591,15 +739,17 @@ if st.session_state.pagina == "projetos":
                 <div class="hero">
                   <div class="eyebrow">Projetos</div>
                   <h1>Nenhum projeto cadastrado</h1>
-                  <div class="sub">Clique em "+ Novo projeto" no canto superior direito para iniciar sua primeira análise.</div>
+                  <div class="sub">Cadastre o primeiro projeto para calcular a viabilidade e mapear os riscos.</div>
                 </div>
                 """
             ),
             unsafe_allow_html=True,
         )
+        with st.container(key="empty_btn"):
+            if st.button("Novo projeto", key="btn_novo_projeto_vazio"):
+                modal_novo_projeto()
         st.stop()
 
-    # Seletor de projeto no topo da tela de Projetos
     opcoes_proj = {f"{p['cod']} · {p['nome']}": p["id"] for p in projetos_disp}
     idx_padrao = 0
     if st.session_state.projeto_selecionado_id in opcoes_proj.values():
@@ -608,12 +758,12 @@ if st.session_state.pagina == "projetos":
         )
 
     st.markdown("<br>", unsafe_allow_html=True)
-    col_sel, col_btn_risco, col_btn_ia = st.columns(
-        [2.5, 1, 1.2], vertical_alignment="bottom"
+    col_sel, col_novo, col_btn_risco, col_btn_ia = st.columns(
+        [2.4, 1, 1, 1.3], vertical_alignment="bottom"
     )
     with col_sel:
         escolha = st.selectbox(
-            "Selecione o Projeto para gerenciar riscos:",
+            "Projeto selecionado",
             list(opcoes_proj.keys()),
             index=idx_padrao,
         )
@@ -625,32 +775,38 @@ if st.session_state.pagina == "projetos":
         st.error("Não foi possível carregar os detalhes deste projeto.")
         st.stop()
 
+    with col_novo:
+        with st.container(key="hero_btn"):
+            if st.button("Novo projeto", key="btn_novo_projeto_proj"):
+                modal_novo_projeto()
+
     with col_btn_risco:
-        if st.button("+ Adicionar Risco", type="primary", use_container_width=True):
-            modal_novo_risco(detalhes["id"], detalhes["nome"])
+        if st.button("+ Adicionar risco", type="primary", use_container_width=True):
+            modal_novo_risco(projetos_disp, detalhes["id"])
 
     with col_btn_ia:
-        gerar_ia = st.button("✨ Gerar Parecer IA (RAG)", use_container_width=True)
+        gerar_ia = st.button("✨ Gerar parecer IA", use_container_width=True)
 
     if gerar_ia:
         with st.spinner(
-            "Consultando vetores no PostgreSQL (pgvector) e gerando parecer com Gemini..."
+            "Consultando a base de conhecimento (pgvector) e gerando o parecer com Gemini..."
         ):
-            res_ia = requests.post(f"{API_URL}/projetos/{detalhes['id']}/analisar-ia")
-            if res_ia.status_code == 200:
-                st.toast("Parecer técnico gerado com sucesso!")
-                st.rerun()
-            else:
-                st.warning(res_ia.json().get("detail", "Erro ao gerar parecer."))
+            _, erro_ia = requisitar(
+                "POST", f"/projetos/{detalhes['id']}/analisar-ia", timeout=120
+            )
+        if erro_ia:
+            st.warning(f"Não foi possível gerar o parecer: {erro_ia}")
+        else:
+            st.toast("Parecer técnico gerado com sucesso!")
+            st.rerun()
 
-    # Cabeçalho e KPIs do Projeto Específico
     st.markdown(
         compacto(
             f"""
             <div class="hero" style="margin-top:16px">
-              <div class="eyebrow">{detalhes["codigo"]} · Experiência: {detalhes["experiencia_equipe"]}</div>
-              <h1>{detalhes["nome"]}</h1>
-              <div class="sub">{detalhes["escopo"]}</div>
+              <div class="eyebrow">{esc(detalhes["codigo"])} · Experiência: {esc(detalhes["experiencia_equipe"])}</div>
+              <h1>{esc(detalhes["nome"])}</h1>
+              <div class="sub">{esc(detalhes["escopo"] or "")}</div>
             </div>
             """
         ),
@@ -702,7 +858,7 @@ if st.session_state.pagina == "projetos":
                       <div class="ico" style="background:{k["bg"]}">{svg_inline(k["icone"], 19, k["cor"], 1.9)}</div>
                       <div>
                         <div class="lbl">{k["label"]}</div>
-                        <div class="line"><span class="val">{k["valor"]}</span><span class="pill">{k["delta"]}</span></div>
+                        <div class="line"><span class="val">{esc(str(k["valor"]))}</span><span class="pill">{esc(str(k["delta"]))}</span></div>
                       </div>
                     </div>
                     """
@@ -710,14 +866,16 @@ if st.session_state.pagina == "projetos":
                 unsafe_allow_html=True,
             )
 
-    # Lista de Riscos do Projeto + Parecer da IA lado a lado
     st.markdown("<br>", unsafe_allow_html=True)
     col_esq, col_dir = st.columns([1.2, 1.3])
 
     with col_esq:
-        st.markdown("#### Riscos Mapeados neste Projeto")
+        st.markdown("#### Riscos mapeados neste projeto")
         if not detalhes["riscos"]:
-            st.info("Nenhum risco mapeado ainda. Clique em '+ Adicionar Risco' acima.")
+            st.markdown(
+                '<div class="empty"><b>Nenhum risco mapeado</b>Use "+ Adicionar risco" para começar a análise.</div>',
+                unsafe_allow_html=True,
+            )
         else:
             for r in detalhes["riscos"]:
                 bg, fg = NIVEL_ESTILO.get(r["prioridade"], ("#f0f3f2", "#4b5a56"))
@@ -726,14 +884,14 @@ if st.session_state.pagina == "projetos":
                         f"""
                         <div class="card" style="padding:14px 18px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;">
                           <div>
-                            <div style="font-size:13px; font-weight:600; color:#172725;">{r["titulo"]}</div>
+                            <div style="font-size:13px; font-weight:600; color:#172725;">{esc(r["titulo"])}</div>
                             <div style="font-size:11px; color:#66736f; margin-top:2px;">
-                              Resp: {r["responsavel"]} · Prob: {r["probabilidade"]}/5 · Imp: {r["impacto"]}/5
+                              Resp: {esc(r["responsavel"])} · Prob: {r["probabilidade"]}/5 · Imp: {r["impacto"]}/5
                             </div>
                           </div>
                           <div>
                             <span class="badge" style="background:{bg};color:{fg}">
-                              Score {r["criticidade_score"]} ({r["prioridade"]})
+                              Score {r["criticidade_score"]} ({esc(r["prioridade"])})
                             </span>
                           </div>
                         </div>
@@ -743,20 +901,21 @@ if st.session_state.pagina == "projetos":
                 )
 
     with col_dir:
-        st.markdown("#### Parecer Técnico Diagnóstico (IA + Literatura PMBOK)")
+        st.markdown("#### Parecer técnico diagnóstico (IA + literatura)")
         if detalhes["parecer_tecnico"]:
             with st.container(border=True):
                 st.markdown(detalhes["parecer_tecnico"])
         else:
-            st.info(
-                "Adicione os riscos do projeto e clique em '✨ Gerar Parecer IA (RAG)' para obter o plano de mitigação fundamentado."
+            st.markdown(
+                '<div class="empty"><b>Parecer ainda não gerado</b>Adicione os riscos e clique em "✨ Gerar parecer IA" para obter o plano de mitigação fundamentado.</div>',
+                unsafe_allow_html=True,
             )
 
     st.stop()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# OUTRAS ABAS DO MENU LATERAL (Riscos Globais / Relatórios)
+# OUTRAS ABAS DO MENU LATERAL (ainda não implementadas)
 # ──────────────────────────────────────────────────────────────────────────────
 if st.session_state.pagina != "home":
     nome_aba = next(r for c, r, _ in NAV if c == st.session_state.pagina)
@@ -765,31 +924,40 @@ if st.session_state.pagina != "home":
             f"""
             <div class="hero">
               <div class="eyebrow">GRIPS</div>
-              <h1>{nome_aba}</h1>
-              <div class="sub">Selecione um projeto na aba 'Projetos' ou na tabela da 'Visão geral' para gerenciar riscos e relatórios.</div>
+              <h1>{esc(nome_aba)}</h1>
+              <div class="sub">Esta seção ainda está em construção. Por enquanto, gerencie riscos e pareceres pela aba Projetos.</div>
             </div>
             """
         ),
         unsafe_allow_html=True,
     )
+    if st.button("Ir para Projetos", key="btn_ir_projetos"):
+        st.session_state.pagina = "projetos"
+        st.rerun()
     st.stop()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # TELA PRINCIPAL: VISÃO GERAL (PAINEL EXECUTIVO 100% DINÂMICO)
 # ──────────────────────────────────────────────────────────────────────────────
-st.markdown(
-    compacto(
-        """
-        <div class="hero">
-          <div class="eyebrow">Painel Executivo</div>
-          <h1>Visão Geral de Projetos e Riscos</h1>
-          <div class="sub">Métricas calculadas em tempo real a partir do banco de dados PostgreSQL.</div>
-        </div>
-        """
-    ),
-    unsafe_allow_html=True,
-)
+col_hero, col_hero_btn = st.columns([4, 1], vertical_alignment="bottom")
+with col_hero:
+    st.markdown(
+        compacto(
+            f"""
+            <div class="hero">
+              <div class="eyebrow">Visão geral</div>
+              <h1>{saudacao()}</h1>
+              <div class="sub">Acompanhe os pontos de atenção e tome decisões com mais contexto. Métricas calculadas em tempo real a partir do banco de dados.</div>
+            </div>
+            """
+        ),
+        unsafe_allow_html=True,
+    )
+with col_hero_btn:
+    with st.container(key="hero_btn"):
+        if st.button("Novo projeto", key="btn_novo_projeto_hero"):
+            modal_novo_projeto()
 
 kpis_dinamicos = [
     {
@@ -847,7 +1015,7 @@ for col, k in zip(cols, kpis_dinamicos):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Gráfico Dinâmico "Exposição por Projeto" + Mapa de Exposição 5x5 Real
+# Gráfico Dinâmico "Evolução do risco" + Mapa de Exposição 5x5 Real
 # ──────────────────────────────────────────────────────────────────────────────
 serie_api = dados_dash["serie_evolucao"]
 eixo_x_api = dados_dash["eixo_x"]
@@ -878,15 +1046,16 @@ y_labels = "".join(
     f'<span style="top:{100 - v}%">{v}%</span>' for v in (100, 75, 50, 25, 0)
 )
 x_labels = "".join(
-    f"<span>{x}</span>" for x in (eixo_x_api[-6:] if eixo_x_api else ["Sem dados"])
+    f"<span>{esc(x)}</span>"
+    for x in (eixo_x_api[-6:] if eixo_x_api else ["Sem dados"])
 )
 
 grafico_html = compacto(
     f"""
     <div class="card card-chart">
-      <div class="c-title">Evolução da exposição ao risco</div>
-      <div class="c-sub">Índice de risco global (%) por projeto cadastrado</div>
-      <div class="legend-top"><i></i>Exposição calculada</div>
+      <div class="c-title">Evolução do risco</div>
+      <div class="c-sub">Exposição ao risco (%) de cada projeto cadastrado</div>
+      <div class="legend-top"><i></i>Índice de exposição</div>
       <div class="chart-wrap">
         <div class="yaxis">{y_labels}</div>
         <div class="plot-col">
@@ -922,8 +1091,8 @@ marcadores = "".join(
 mapa_html = compacto(
     f"""
     <div class="card card-heat">
-      <div class="c-title">Mapa de exposição consolidado</div>
-      <div class="c-sub">Distribuição real (Probabilidade × Impacto)</div>
+      <div class="c-title">Mapa de exposição</div>
+      <div class="c-sub">Probabilidade × impacto dos riscos mapeados</div>
       <div class="heat-wrap">
         <div class="ylabel"><span>IMPACTO</span></div>
         <div class="heat"><div class="heat-grid">{celulas}</div>{marcadores}</div>
@@ -950,9 +1119,11 @@ with st.container(key="row_chart"):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Tabela Dinâmica: Análises Recentes
+# Tabela Dinâmica: Projetos em atenção (ordenados pela exposição ao risco)
 # ──────────────────────────────────────────────────────────────────────────────
-projetos_filtrados = dados_dash["projetos"]
+projetos_filtrados = sorted(
+    dados_dash["projetos"], key=lambda p: (-p["exp"], p["viabilidade"])
+)
 if termo_busca:
     termo = termo_busca.lower()
     projetos_filtrados = [
@@ -961,40 +1132,43 @@ if termo_busca:
         if termo in p["nome"].lower() or termo in p["cod"].lower()
     ]
 
+seta = svg_inline("arrow", 14, "#475569", 2)
 linhas = ""
 for p in projetos_filtrados:
     bg, fg = NIVEL_ESTILO.get(p["nivel"], ("#e8f3ef", "#388b7e"))
     linhas += f"""
     <div class="grid-row t-row">
       <div class="proj">
-        <div class="av">{p["ini"]}</div>
-        <div><div class="n">{p["nome"]}</div><div class="c">{p["cod"]} · {p["total_riscos"]} risco(s)</div></div>
+        <div class="av">{esc(p["ini"])}</div>
+        <div><div class="n">{esc(p["nome"])}</div><div class="c">{esc(p["cod"])} · {p["total_riscos"]} risco(s)</div></div>
       </div>
-      <div><span class="badge" style="background:{bg};color:{fg}"><i style="background:{fg}"></i>{p["nivel"]}</span></div>
+      <div><span class="badge" style="background:{bg};color:{fg}"><i style="background:{fg}"></i>{esc(p["nivel"])}</span></div>
       <div class="exp">
         <div class="bar"><b style="width:{p["exp"]}%"></b></div>
         <span class="v">{p["exp"]}%</span>
       </div>
-      <div><span class="chip">{p["status_risco"]}</span></div>
-      <div class="rev" style="color:#2f8577">{p["viabilidade"]}% · {p["status_viabilidade"]}</div>
-      <div class="rev">{p["rev"]}</div>
+      <div><span class="chip">{esc(p["status_risco"])}</span></div>
+      <div class="rev" style="color:#2f8577">{p["viabilidade"]}% · {esc(p["status_viabilidade"])}</div>
+      <div class="rev">{esc(p["rev"])}</div>
+      <div class="act"><a class="go" href="?projeto={p["id"]}" target="_self" title="Abrir projeto">{seta}</a></div>
     </div>
     """
 
 if not linhas:
-    linhas = '<div style="padding:28px 12px; font-size:12px; color:#66736f;">Nenhum projeto encontrado. Clique em <b>+ Novo projeto</b> no topo da página para cadastrar.</div>'
+    linhas = '<div style="padding:28px 12px; font-size:12px; color:#66736f;">Nenhum projeto encontrado. Use <b>Novo projeto</b> no topo da página para cadastrar.</div>'
 
 tabela_html = compacto(
     f"""
     <div class="card card-table">
       <div class="t-head">
         <div>
-          <div class="c-title">Análises Recentes</div>
-          <div class="c-sub">Projetos cadastrados com risco global e viabilidade calculados pelo sistema</div>
+          <div class="c-title">Projetos em atenção</div>
+          <div class="c-sub">Ordenados pela exposição ao risco calculada. Use a seta para abrir o projeto.</div>
         </div>
+        <a class="t-link" href="?pagina=projetos" target="_self">Ver todos {svg_inline("arrow", 13, "#1f7a78", 2.2)}</a>
       </div>
       <div class="grid-row t-cols">
-        <span>Código / Projeto</span><span>Nível de risco</span><span>Risco Global</span><span>Status do risco</span><span>Viabilidade</span><span>Data</span>
+        <span>Projeto</span><span>Nível de risco</span><span>Exposição</span><span>Status do risco</span><span>Viabilidade</span><span>Data</span><span></span>
       </div>
       {linhas}
     </div>
@@ -1003,23 +1177,3 @@ tabela_html = compacto(
 
 st.markdown('<div class="row-table"></div>', unsafe_allow_html=True)
 st.markdown(tabela_html, unsafe_allow_html=True)
-
-# Atalho rápido abaixo da tabela para abrir os detalhes de qualquer projeto
-if projetos_filtrados:
-    st.markdown("<br>", unsafe_allow_html=True)
-    c_atalho1, c_atalho2 = st.columns([3, 1], vertical_alignment="bottom")
-    with c_atalho1:
-        mapa_atalho = {
-            f"Abrir detalhes de: {p['cod']} - {p['nome']}": p["id"]
-            for p in projetos_filtrados
-        }
-        proj_escolhido = st.selectbox(
-            "Acesso rápido aos detalhes e matriz de riscos do projeto:",
-            list(mapa_atalho.keys()),
-            label_visibility="collapsed",
-        )
-    with c_atalho2:
-        if st.button("Ver Detalhes do Projeto →", use_container_width=True):
-            st.session_state.projeto_selecionado_id = mapa_atalho[proj_escolhido]
-            st.session_state.pagina = "projetos"
-            st.rerun()

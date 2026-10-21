@@ -5,9 +5,9 @@ Concentra em um só lugar a atualização dos campos calculados, para que a API
 e os scripts de migração usem exatamente a mesma regra. Não faz commit.
 """
 
-from models import Projeto
-from motor_riscos import MotorDeRisco
-from motor_viabilidade import calcular_viabilidade, classificar_viabilidade
+from backend.models import Projeto
+from backend.motor_riscos import MotorDeRisco
+from backend.motor_viabilidade import calcular_viabilidade, classificar_viabilidade
 
 _motor = MotorDeRisco()
 

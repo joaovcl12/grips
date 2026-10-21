@@ -1,16 +1,23 @@
-# Ambientes virtuais e cache
+# Segredos
+.env
+
+# Ambiente virtual e caches
 venv/
-env/
+.venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
-# Arquivos de ambiente e banco de dados local
-.env
-*.db
-*.sqlite3
+# Referenciais teóricos (PDFs com direitos autorais: não versionar)
+documentos/*
+!documentos/.gitkeep
 
-# Se você mapeou a pasta de dados do PostgreSQL no Docker para uma pasta local
-postgres-data/
-.env
-.claude/skills
-.agents/skills
+# Editor / sistema
+.idea/
+.DS_Store
+
+# Ferramentas de agentes (locais)
+.agents/
+.claude/

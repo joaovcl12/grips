@@ -1,17 +1,21 @@
+"""
+Ingestão de referenciais teóricos (PMBOK, ISO 31000...) na base vetorial.
+
+Uso (na raiz do projeto, com o Postgres do Docker ligado):
+    python -m scripts.ingestao_pdf                      # usa documentos/pmbok.pdf
+    python -m scripts.ingestao_pdf documentos/outro.pdf
+"""
+
 import os
+import sys
 import time
 
-from dotenv import load_dotenv
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_postgres import PGVector
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-_ = load_dotenv()  # "_ =" só pra silenciar o aviso reportUnusedCallResult
-
-# IMPORTANTE: langchain_postgres exige o driver psicopg3 na string de conexão.
-STRING_CONEXAO_BD = "postgresql+psycopg://admin:adminpassword@localhost:5432/grips_db"
-NOME_COLECAO = "referenciais_teoricos"
+from backend.config import NOME_COLECAO_VETORIAL, url_banco
 
 # O free tier do modelo gemini-embedding-001 permite no máximo 100
 # requisições por minuto (RPM). Usamos uma margem de segurança abaixo
@@ -20,6 +24,8 @@ TAMANHO_LOTE = 80
 ESPERA_ENTRE_LOTES_SEGUNDOS = 65
 MAX_TENTATIVAS_POR_LOTE = 5
 ESPERA_INICIAL_RETRY_SEGUNDOS = 35
+
+DOCUMENTO_PADRAO = "documentos/pmbok.pdf"
 
 
 def _dividir_em_lotes(lista: list, tamanho: int) -> list[list]:
@@ -89,8 +95,8 @@ def alimentar_base_conhecimento(caminho_pdf: str) -> None:
 
     vetor_store: PGVector | None = None
     engine_args = {
-        "collection_name": NOME_COLECAO,
-        "connection": STRING_CONEXAO_BD,
+        "collection_name": NOME_COLECAO_VETORIAL,
+        "connection": url_banco(),
         "use_jsonb": True,
     }
 
@@ -111,9 +117,9 @@ def alimentar_base_conhecimento(caminho_pdf: str) -> None:
 
 
 if __name__ == "__main__":
-    documento_teste = "documentos/pmbok.pdf"
+    documento = sys.argv[1] if len(sys.argv) > 1 else DOCUMENTO_PADRAO
 
-    if os.path.exists(documento_teste):
-        alimentar_base_conhecimento(documento_teste)
+    if os.path.exists(documento):
+        alimentar_base_conhecimento(documento)
     else:
-        print(f"ERRO: o documento '{documento_teste}' não foi encontrado")
+        print(f"ERRO: o documento '{documento}' não foi encontrado")

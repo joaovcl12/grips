@@ -8,15 +8,15 @@ Passos (idempotente, pode rodar mais de uma vez):
   3. remove a coluna antiga `status`.
 
 Uso (na raiz do projeto, com o Postgres do Docker ligado):
-    python migrar_status.py
+    python -m scripts.migrar_status
 """
 
-from servico_projetos import atualizar_exposicao, atualizar_viabilidade
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-import models
-from database import engine
+from backend import models
+from backend.database import engine
+from backend.servico_projetos import atualizar_exposicao, atualizar_viabilidade
 
 
 def migrar() -> None:
