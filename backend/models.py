@@ -37,8 +37,11 @@ class Projeto(Base):
         DateTime, default=_agora_utc
     )
 
-    # Relacionamento 1-para-Muitos com Riscos
+    # Relacionamentos 1-para-Muitos (apagar o projeto apaga riscos e histórico)
     riscos: Mapped[list["Risco"]] = relationship(
+        back_populates="projeto", cascade="all, delete-orphan"
+    )
+    historico: Mapped[list["HistoricoExposicao"]] = relationship(
         back_populates="projeto", cascade="all, delete-orphan"
     )
 
@@ -59,3 +62,24 @@ class Risco(Base):
     )
 
     projeto: Mapped["Projeto"] = relationship(back_populates="riscos")
+
+
+class HistoricoExposicao(Base):
+    """
+    Foto da exposição do projeto a cada mudança nos riscos (criação do projeto,
+    risco adicionado, editado ou removido). Alimenta o gráfico de evolução.
+    Tabela nova: o `create_all` da API a cria sozinho, sem migração.
+    """
+
+    __tablename__ = "historico_exposicao"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    projeto_id: Mapped[int] = mapped_column(ForeignKey("projetos.id"), index=True)
+    risco_global_score: Mapped[float] = mapped_column(Float)
+    nivel_risco: Mapped[str] = mapped_column(String)
+    total_riscos: Mapped[int] = mapped_column(Integer)
+    data_registro: Mapped[datetime.datetime] = mapped_column(
+        DateTime, default=_agora_utc
+    )
+
+    projeto: Mapped["Projeto"] = relationship(back_populates="historico")
